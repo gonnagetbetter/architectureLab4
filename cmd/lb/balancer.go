@@ -1,54 +1,77 @@
 package main
 
 import (
-	"context"
-	"flag"
-	"fmt"
-	"io"
-	"log"
-	"net/http"
-	"time"
+  "context"
+  "flag"
+  "fmt"
+  "io"
+  "log"
+  "net/http"
+  "sync"
+  "time"
 
-	"github.com/gonnagetbetter/architectureLab4/httptools"
-	"github.com/gonnagetbetter/architectureLab4/signal"
+  "github.com/gonnagetbetter/architectureLab4/httptools"
+  "github.com/gonnagetbetter/architectureLab4/signal"
 )
 
 var (
-	port = flag.Int("port", 8090, "load balancer port")
-	timeoutSec = flag.Int("timeout-sec", 3, "request timeout time in seconds")
-	https = flag.Bool("https", false, "whether backends support HTTPs")
-
-	traceEnabled = flag.Bool("trace", false, "whether to include tracing information into responses")
+  port         = flag.Int("port", 8090, "lb port")
+  timeoutSec   = flag.Int("timeout-sec", 3, "request timeout time in seconds")
+  https        = flag.Bool("https", false, "whether backends support HTTPs")
+  traceEnabled = flag.Bool("trace", false, "whether to include tracing information into responses")
 )
 
+type Server struct {
+  URL            string
+  ConnCnt        int
+  Healthy        bool
+  DataProcessed  int64
+}
+
 var (
-	timeout = time.Duration(*timeoutSec) * time.Second
-	serversPool = []string{
-		"server1:8080",
-		"server2:8080",
-		"server3:8080",
-	}
+  timeout     = time.Duration(*timeoutSec) * time.Second
+  serversPool = []*Server{
+    {URL: "server1:8080"},
+    {URL: "server2:8080"},
+    {URL: "server3:8080"},
+  }
+  mutex sync.Mutex
 )
 
 func scheme() string {
-	if *https {
-		return "https"
-	}
-	return "http"
+  if *https {
+    return "https"
+  }
+  return "http"
 }
 
-func health(dst string) bool {
-	ctx, _ := context.WithTimeout(context.Background(), timeout)
-	req, _ := http.NewRequestWithContext(ctx, "GET",
-		fmt.Sprintf("%s://%s/health", scheme(), dst), nil)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return false
-	}
-	if resp.StatusCode != http.StatusOK {
-		return false
-	}
-	return true
+func health(server *Server) bool {
+  ctx, _ := context.WithTimeout(context.Background(), timeout)
+  req, _ := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s://%s/health", scheme(), server.URL), nil)
+  resp, err := http.DefaultClient.Do(req)
+  if err != nil {
+    return false
+  }
+  if resp.StatusCode != http.StatusOK {
+    return false
+  }
+  server.Healthy = true
+  return true
+}
+
+func findBestServer(pool []*Server) int {
+  bestServerIndex := -1
+  leastDataProcessed := int64(^uint64(0) >> 1)
+
+  for i, server := range pool {
+    if server.Healthy {
+      if bestServerIndex == -1 || server.DataProcessed < leastDataProcessed {
+        bestServerIndex = i
+        leastDataProcessed = server.DataProcessed
+      }
+    }
+  }
+  return bestServerIndex
 }
 
 func forward(dst string, rw http.ResponseWriter, r *http.Request) error {
