@@ -6,6 +6,7 @@ import (
     "net/http"
     "os"
     "time"
+    "testing"
 )
 
 const baseAddress = "http://balancer:8090"
