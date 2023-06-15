@@ -12,6 +12,8 @@ import (
 
 const bufSize = 8192
 
+const deleteToken = "DELETED"
+
 const outFileName = "current-data"
 
 var ErrNotFound = fmt.Errorf("record does not exist")
@@ -40,6 +42,10 @@ func (s *Segment) getValue(position int64) (string, error) {
 	value, err := readValue(reader)
 	if err != nil {
 		return "", err
+	}
+
+	if value == deleteToken {
+		return "", ErrNotFound
 	}
 
 	return value, nil
@@ -215,6 +221,7 @@ func (db *Db) Get(key string) (string, error) {
 	if !ok {
 		return "", ErrNotFound
 	}
+	
 
 	return segment.getValue(position)
 }
@@ -255,45 +262,7 @@ func (db *Db) Put(key, value string) error {
 }
 
 func (db *Db) Delete(key string) error {
-	db.indexLock.Lock()
-	defer db.indexLock.Unlock()
-
-	var (
-		segment  *Segment
-		position int64
-		ok       bool
-	)
-
-	for i := range db.segments {
-		segment = db.segments[len(db.segments)-i-1]
-		segment.lock.RLock()
-		position, ok = segment.index[key]
-		segment.lock.RUnlock()
-		if ok {
-			break
-		}
-	}
-
-	if !ok {
-		return ErrNotFound
-	}
-
-	deletionToken := []byte("DELETED")
-	file, err := os.OpenFile(segment.outPath, os.O_RDWR, 0o600)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	_, err = file.WriteAt(deletionToken, position)
-	if err != nil {
-		return err
-	}
-
-	segment.lock.Lock()
-	delete(segment.index, key)
-	segment.lock.Unlock()
-
+	db.Put(key, deleteToken)
 	return nil
 }
 
