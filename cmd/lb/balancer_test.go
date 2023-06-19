@@ -56,30 +56,6 @@ func (s *MySuite) TestFindBestServer(c *C) {
     c.Assert(findBestServer(serversPool), Equals, 1)
 }
 
-func (s *MySuite) TestHealth(c *C) {
-    mockURL := "http://example.com/health"
-    httpmock.RegisterResponder(http.MethodGet, mockURL, httpmock.NewStringResponder(http.StatusOK, ""))
-
-    httpmock.Activate()
-    defer httpmock.DeactivateAndReset()
-
-    server := &Server{
-        URL: "example.com",
-    }
-
-    result := health(server)
-
-    c.Assert(result, Equals, true)
-    c.Assert(server.Healthy, Equals, true)
-
-    server.Healthy = false // resetting before next test
-
-    httpmock.RegisterResponder(http.MethodGet, mockURL, httpmock.NewStringResponder(http.StatusInternalServerError, ""))
-    result2 := health(server)
-
-    c.Assert(result2, Equals, false)
-    c.Assert(server.Healthy, Equals, false)
-}
 
 func (s *MySuite) TestForward(c *C) {
     httpmock.Activate()

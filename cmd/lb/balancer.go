@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"sync"
 	"time"
+	"container/heap"
 
 	"github.com/gonnagetbetter/architectureLab4/httptools"
 	"github.com/gonnagetbetter/architectureLab4/signal"
@@ -45,33 +46,70 @@ func scheme() string {
 	return "http"
 }
 
-func health(server *Server) bool {
-	ctx, _ := context.WithTimeout(context.Background(), timeout)
-	req, _ := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s://%s/health", scheme(), server.URL), nil)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return false
-	}
-	if resp.StatusCode != http.StatusOK {
-		return false
-	}
-	server.Healthy = true
-	return true
+type IndexedServer struct {
+    Index  int
+    Server *Server
+}
+
+type ServerHeap []*IndexedServer
+
+func (h ServerHeap) Len() int {
+    return len(h)
+}
+
+func (h ServerHeap) Less(i, j int) bool {
+    return h[i].Server.DataProcessed < h[j].Server.DataProcessed
+}
+
+func (h ServerHeap) Swap(i, j int) {
+    h[i], h[j] = h[j], h[i]
+    h[i].Index = i
+    h[j].Index = j
+}
+
+func (h *ServerHeap) Push(x interface{}) {
+    n := len(*h)
+    x.(*IndexedServer).Index = n
+    *h = append(*h, x.(*IndexedServer))
+}
+
+func (h *ServerHeap) Pop() interface{} {
+    old := *h
+    n := len(old)
+    x := old[n-1]
+    *h = old[0 : n-1]
+    return x
+}
+
+func health(server *Server, ch chan<- *Server) {
+    ctx, _ := context.WithTimeout(context.Background(), timeout)
+    req, _ := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s://%s/health", scheme(), server.URL), nil)
+    resp, err := http.DefaultClient.Do(req)
+    if err == nil && resp.StatusCode == http.StatusOK {
+        server.Healthy = true
+        ch <- server
+    }
 }
 
 func findBestServer(pool []*Server) int {
-	bestServerIndex := -1
-	leastDataProcessed := int64(^uint64(0) >> 1)
+    ch := make(chan *Server)
+    for _, server := range pool {
+        go health(server, ch)
+    }
 
-	for i, server := range pool {
-		if server.Healthy {
-			if bestServerIndex == -1 || server.DataProcessed < leastDataProcessed {
-				bestServerIndex = i
-				leastDataProcessed = server.DataProcessed
-			}
-		}
-	}
-	return bestServerIndex
+    h := &ServerHeap{}
+    heap.Init(h)
+    for i := 0; i < len(pool); i++ {
+        server := <-ch
+        if server.Healthy {
+            heap.Push(h, &IndexedServer{Index: i, Server: server})
+        }
+    }
+
+    if h.Len() > 0 {
+        return heap.Pop(h).(*IndexedServer).Index
+    }
+    return -1
 }
 
 func forward(rw http.ResponseWriter, r *http.Request) error {
@@ -129,17 +167,17 @@ func forward(rw http.ResponseWriter, r *http.Request) error {
 func main() {
 	flag.Parse()
 
-	for _, server := range serversPool {
-		server.Healthy = health(server)
-		go func(s *Server) {
-			for range time.Tick(10 * time.Second) {
-				mutex.Lock()
-				s.Healthy = health(s)
-				log.Printf("%s: health=%t, connCnt=%d, dataProcessed=%d", s.URL, s.Healthy, s.ConnCnt, s.DataProcessed)
-				mutex.Unlock()
-			}
-		}(server)
-	}
+	// for _, server := range serversPool {
+	// 	server.Healthy = health(server)
+	// 	go func(s *Server) {
+	// 		for range time.Tick(10 * time.Second) {
+	// 			mutex.Lock()
+	// 			s.Healthy = health(s)
+	// 			log.Printf("%s: health=%t, connCnt=%d, dataProcessed=%d", s.URL, s.Healthy, s.ConnCnt, s.DataProcessed)
+	// 			mutex.Unlock()
+	// 		}
+	// 	}(server)
+	// }
 
 	frontend := httptools.CreateServer(*port, http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		forward(rw, r)
